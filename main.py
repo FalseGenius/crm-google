@@ -9,7 +9,10 @@ from dotenv import dotenv_values
 import uuid
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 import requests
+
 
 
 SECRET_KEY = "your-secret-key"
@@ -38,8 +41,6 @@ async def login(request: Request):
     response = RedirectResponse(url=url + "?" + "&".join([f"{key}={value}" for key, value in params.items()]))
     return response
 
-from google.auth.transport.requests import Request as GoogleRequest
-from google.oauth2 import id_token
 
 @app.get("/auth/callback")
 async def google_callback(request: Request, code: str = Query(None), state: str = Query(None)):
@@ -68,3 +69,18 @@ async def google_callback(request: Request, code: str = Query(None), state: str 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get('/gmail/messages')
+async def list_gmail_messages(request:Request):
+    accessToken = config['ACCESS_TOKEN']
+    try:
+        creds = Credentials(accessToken)
+        service = build('gmail', 'v1', credentials=creds)
+        results = service.users().messages().list(userId='me', maxResults=50).execute()
+        messages = results.get('messages', [])
+
+        return {"Message":"Gmail messages fetched successfully", "messages":messages}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
