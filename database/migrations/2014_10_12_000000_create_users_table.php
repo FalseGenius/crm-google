@@ -16,8 +16,8 @@ return new class extends Migration
             $table->string('name');
             $table->string('email')->unique();
             $table->text('access_token')->nullable();
-            $table->string('picture');
-            $table->string('password_hash');
+            $table->string('picture')->nullable();
+            $table->string('password_hash')->nullable();
             $table->timestamps();
         });
     }

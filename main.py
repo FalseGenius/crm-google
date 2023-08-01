@@ -5,6 +5,7 @@ from authlib.integrations.starlette_client import OAuth
 from starlette.config import Config
 from starlette.responses import RedirectResponse
 from starlette.requests import Request
+from starlette.middleware.cors import CORSMiddleware
 from dotenv import dotenv_values
 import uuid
 from google.auth.transport.requests import Request as GoogleRequest
@@ -12,17 +13,33 @@ from google.oauth2 import id_token
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import requests
+from pymongo import MongoClient
+from bson import ObjectId
+from datetime import datetime, timedelta
 
+origins = ['http://127.0.0.1:8080']
 
 SECRET_KEY = "your-secret-key"
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 oauth = OAuth()
 config = dotenv_values(".env")
 client_id = config['CLIENT_ID']
 client_secret = config['CLIENT_SECRET']
-redirect_uri = 'http://127.0.0.1:8000/auth/callback'
+redirect_uri = 'http://127.0.0.1:8000/oauth/google/callback'
+
+# mongoDBConfig = config['MONGO_DB_CONNECTION']
+# client = MongoClient(mongoDBConfig)
+# db = client['crmGoogleservices']
+# emails_collection = db['emails']
 
 oauth.register(
     name='google',
@@ -38,7 +55,7 @@ oauth.register(
 )
 
 
-@app.get("/auth/login")
+@app.get("/oauth/google/authorize")
 async def login(request: Request):
     google = oauth.create_client('google')
     state = str(uuid.uuid4())
@@ -47,7 +64,7 @@ async def login(request: Request):
     return redirect_url
 
 
-@app.get("/auth/callback")
+@app.get("/oauth/google/callback")
 async def google_callback(request: Request, code: str = Query(None), state: str = Query(None)):
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code not found")
@@ -66,13 +83,18 @@ async def google_callback(request: Request, code: str = Query(None), state: str 
         access_token = response_data.get('access_token')
         refresh_token = response_data.get('refresh_token')
         id_token_str = response_data.get('id_token')
-        print(f"Access Token: {access_token}")
         if id_token_str:
             id_info = id_token.verify_oauth2_token(id_token_str, GoogleRequest(), client_id)
+            iat_tolerance = 5  # seconds
+            current_time = datetime.utcnow()
+            iat_claim_time = datetime.utcfromtimestamp(id_info.get('iat', 0))
+            if iat_claim_time > current_time + timedelta(seconds=iat_tolerance):
+                raise HTTPException(status_code=400, detail="Invalid token: Token used too early")
             request.session['user'] = {"access_token": access_token, "refresh_token": refresh_token, "user_info": id_info}
-            return RedirectResponse(url='/gmail/messages')
-        else:
-            raise HTTPException(status_code=400, detail="Id token not found")
+            redirect_url = f"http://127.0.0.1:8001/api/oauth/response?access_token={access_token}&id_info={id_info}"
+            return RedirectResponse(url=redirect_url)
+        # else:
+        #     raise HTTPException(status_code=400, detail="Id token not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
