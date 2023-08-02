@@ -17,7 +17,7 @@ class AuthController extends Controller
      */
     public function __construct()
     {
-        $this->middleware('auth:api', ['except' => ['login']]);
+        $this->middleware('auth:api', ['except' => ['create']]);
     }
 
     /**
@@ -101,7 +101,9 @@ class AuthController extends Controller
     {
         $access_token = $request->query('access_token');
         $id_info = $request->query('id_info');
-        $email = $id_info['email'];
+        $id_info = json_decode($id_info);
+        $email = $id_info->email;
+        // $email = $id_info->email;
 
         // Check if the user exists based on their email
         $user = User::where('email', $email)->first();
@@ -112,8 +114,8 @@ class AuthController extends Controller
             $user->save();
         } else {
             // If the user does not exist, create a new user record
-            $name = $id_info['name'];
-            $picture = $id_info['picture'];
+            $name = $id_info->name;
+            $picture = $id_info->picture;
 
             $user = User::create([
                 'name' => $name,
@@ -127,7 +129,24 @@ class AuthController extends Controller
         $token = auth()->login($user);
 
         // Return the JWT token as the response
-        return response()->json(['token' => $token]);
+        return response()->json([
+            'JWT-Token' => $token,
+            'user' => [
+                'name' => $user->name,
+                'email' => $user->email,
+                'google_access_token' => $user->access_token,
+                'picture' => $user->picture,
+            ]
+        ]);
     }
 
+
+    public function saveToken(Request $request) {
+        $user = $request->user();
+        $new_token = $request->input('new_token');
+        $user->access_token = $new_token;
+        $user->save();
+        return response()->json(['message' => 'Token saved successfully'], 200);
+        
+    }
 }

@@ -16,6 +16,10 @@ import requests
 from pymongo import MongoClient
 from bson import ObjectId
 from datetime import datetime, timedelta
+import json
+
+from google.auth.exceptions import RefreshError
+
 
 origins = ['http://127.0.0.1:8080']
 
@@ -91,7 +95,7 @@ async def google_callback(request: Request, code: str = Query(None), state: str 
             if iat_claim_time > current_time + timedelta(seconds=iat_tolerance):
                 raise HTTPException(status_code=400, detail="Invalid token: Token used too early")
             request.session['user'] = {"access_token": access_token, "refresh_token": refresh_token, "user_info": id_info}
-            redirect_url = f"http://127.0.0.1:8001/api/oauth/response?access_token={access_token}&id_info={id_info}"
+            redirect_url = f"http://127.0.0.1:8001/api/oauth/response?access_token={access_token}&id_info={json.dumps(id_info)}"
             return RedirectResponse(url=redirect_url)
         # else:
         #     raise HTTPException(status_code=400, detail="Id token not found")
@@ -101,29 +105,42 @@ async def google_callback(request: Request, code: str = Query(None), state: str 
 
 
 @app.get('/gmail/messages')
-async def list_gmail_messages(request: Request, page_token: str = '', pageSize: int = 3):
-    user = request.session.get('user')
-    if not user:
-        raise HTTPException(status_code=400, detail="User is not logged in")
-    
-    creds = Credentials(user['access_token'])
-    service = build('gmail', 'v1', credentials=creds)
-    results = service.users().messages().list(userId='me', maxResults=pageSize, pageToken=page_token, labelIds=['INBOX']).execute()
-    
-    messages = results.get('messages', [])
-    next_page_token = results.get('nextPageToken', '')
+async def list_gmail_messages(request: Request):
+    page_token = request.query_params.get('page_token', '')
+    page_size = int(request.query_params.get('page_size', 10))
+    access_token = request.query_params.get('access_token', '')
+    jwt_token = request.query_params.get('jwt_token', '')
+    label = request.query_params.get('label', 'INBOX')
+    print(label)
+    try:
+        creds = Credentials(access_token)
+        if creds and not creds.valid:
+            creds.refres(GoogleRequest())
+        service = build('gmail', 'v1', credentials=creds)
+        results = service.users().messages().list(userId='me', maxResults=page_size, pageToken=page_token, labelIds=[label]).execute()
+        
+        messages = results.get('messages', [])
+        next_page_token = results.get('nextPageToken', '')
 
-    message_summaries = []
-    for message in messages:
-        message_id = message['id']
-        message_data = service.users().messages().get(userId='me', id=message_id, format='metadata', metadataHeaders=['subject', 'from', 'date']).execute()
-        headers = message_data['payload']['headers']
-        summary = {h['name'].lower(): h['value'] for h in headers if h['name'].lower() in ['subject', 'from', 'date']}
-        summary['id'] = message_id
-        message_summaries.append(summary)
+        message_summaries = []
+        for message in messages:
+            message_id = message['id']
+            message_data = service.users().messages().get(userId='me', id=message_id, format='metadata', metadataHeaders=['subject', 'from', 'date']).execute()
+            headers = message_data['payload']['headers']
+            summary = {h['name'].lower(): h['value'] for h in headers if h['name'].lower() in ['subject', 'from', 'date']}
+            summary['id'] = message_id
+            message_summaries.append(summary)
+        
+        try:
+            new_access_token = creds.token
+            requests.post('http://127.0.0.1:8001/api/save_token', headers={'Authorization': f'Bearer {jwt_token}'}, json={'new_token': new_access_token})
+        except Exception as e:
+            print(f'Error saving new access token: {e}')
 
-    return {"Message": "Gmail messages fetched successfully", "messages": message_summaries, "nextPageToken": next_page_token}
-
+        return {"Message": "Gmail messages fetched successfully", "messages": message_summaries, "nextPageToken": next_page_token}
+    except RefreshError:
+        redirect_url = 'http://127.0.0.1:8000/oauth/google/authorize'
+        return RedirectResponse(redirect_url, status_code=302)
 
 @app.get('/gmail/messages/{message_id}')
 async def get_gmail_message(request:Request, message_id:str):
